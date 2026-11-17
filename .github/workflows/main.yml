@@ -25,9 +25,13 @@ jobs:
           echo "UBUNTU_PASS=$PASSWORD" >> $GITHUB_ENV
 
       - name: Instalar y conectar Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          args: --hostname=ubuntu-runner-${{ github.run_id }} --ssh
+
+      - name: Obtener IP de Tailscale
         run: |
-          curl -fsSL https://tailscale.com | sh
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ubuntu-runner-$GITHUB_RUN_ID --ssh
           TS_IP=$(tailscale ip -4)
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 

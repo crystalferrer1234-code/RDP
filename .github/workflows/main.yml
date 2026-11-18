@@ -5,7 +5,7 @@ on:
 
 jobs:
   secure-rdp:
-    runs-on: ubuntu-latest
+    runs-on: wndows-latest
     timeout-minutes: 360
 
     steps:

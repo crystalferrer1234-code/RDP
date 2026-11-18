@@ -12,8 +12,8 @@ jobs:
       - name: Install Desktop Environment & XRDP
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp dbus-x11
-          echo "xfce4-session" > ~/.xsession
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp dbus-x11 netcat-openbsd
+          sudo adduser xrdp ssl-cert
           sudo systemctl enable xrdp
           sudo systemctl restart xrdp
 
@@ -27,33 +27,32 @@ jobs:
           sudo chown Skyro:Skyro /home/Skyro/.xsession
           echo "RDP_CREDS=User: Skyro | Password: $PASSWORD" >> $GITHUB_ENV
 
-      - name: Install Tailscale
-        run: |
-          curl -fsSL https://tailscale.com | sh
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          hostname: gh-ubuntu-${{ github.run_id }}
 
-      - name: Establish Tailscale Connection
+      - name: Get Tailscale IP & Verify RDP
         run: |
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-ubuntu-$GITHUB_RUN_ID
-          
           TS_IP=""
           RETRIES=0
           while [ -z "$TS_IP" ] && [ $RETRIES -lt 10 ]; do
               TS_IP=$(tailscale ip -4)
-              sleep 5
+              sleep 3
               RETRIES=$((RETRIES+1))
           done
           
           if [ -z "$TS_IP" ]; then
-              echo "Tailscale IP not assigned. Exiting."
+              echo "Error: Tailscale IP not assigned."
               exit 1
           fi
+          
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-
-      - name: Verify RDP Accessibility
-        run: |
-          echo "Tailscale IP: $TAILSCALE_IP"
-          if ! nc -zv $TAILSCALE_IP 3389; then
-              echo "TCP connection to RDP port 3389 failed"
+          echo "Tailscale IP: $TS_IP"
+          
+          if ! nc -zv $TS_IP 3389; then
+              echo "Error: TCP connection to RDP port 3389 failed"
               exit 1
           fi
           echo "TCP connectivity successful!"
@@ -62,7 +61,6 @@ jobs:
         run: |
           echo -e "\n=== RDP ACCESS ==="
           echo "Address: $TAILSCALE_IP"
-          echo "Username: Skyro"
           echo "$RDP_CREDS"
           echo -e "==================\n"
           

@@ -1,100 +1,72 @@
-name: RDP
+name: Ubuntu RDP
 
 on:
   workflow_dispatch:
 
 jobs:
   secure-rdp:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
-      - name: Configure Core RDP Settings
+      - name: Install Desktop Environment & XRDP
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
-
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
-
-          Restart-Service -Name TermService -Force
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y xfce4 xfce4-goodies xrdp dbus-x11
+          echo "xfce4-session" > ~/.xsession
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
 
       - name: Create RDP User with Secure Password
         run: |
-          Add-Type -AssemblyName System.Security
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-          
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "Skyro" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "Skyro"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "Skyro"
-          
-          echo "RDP_CREDS=User: Skyro | Password: $password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name "Skyro")) {
-              Write-Error "User creation failed"
-              exit 1
-          }
+          PASSWORD=$(openssl rand -base64 12)
+          sudo useradd -m -s /bin/bash Skyro
+          echo "Skyro:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo Skyro
+          echo "xfce4-session" | sudo tee /home/Skyro/.xsession > /dev/null
+          sudo chown Skyro:Skyro /home/Skyro/.xsession
+          echo "RDP_CREDS=User: Skyro | Password: $PASSWORD" >> $GITHUB_ENV
 
       - name: Install Tailscale
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet /norestart" -Wait
-          Remove-Item $installerPath -Force
+          curl -fsSL https://tailscale.com | sh
 
       - name: Establish Tailscale Connection
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-ubuntu-$GITHUB_RUN_ID
           
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-              Start-Sleep -Seconds 5
-              $retries++
-          }
+          TS_IP=""
+          RETRIES=0
+          while [ -z "$TS_IP" ] && [ $RETRIES -lt 10 ]; do
+              TS_IP=$(tailscale ip -4)
+              sleep 5
+              RETRIES=$((RETRIES+1))
+          done
           
-          if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
+          if [ -z "$TS_IP" ]; then
+              echo "Tailscale IP not assigned. Exiting."
               exit 1
-          }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-      
+          fi
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
       - name: Verify RDP Accessibility
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
-          if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
+          echo "Tailscale IP: $TAILSCALE_IP"
+          if ! nc -zv $TAILSCALE_IP 3389; then
+              echo "TCP connection to RDP port 3389 failed"
               exit 1
-          }
-          Write-Host "TCP connectivity successful!"
+          fi
+          echo "TCP connectivity successful!"
 
       - name: Maintain Connection
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: Skyro"
-          Write-Host "Password: $env:RDP_CREDS"
-          Write-Host "==================`n"
+          echo -e "\n=== RDP ACCESS ==="
+          echo "Address: $TAILSCALE_IP"
+          echo "Username: Skyro"
+          echo "$RDP_CREDS"
+          echo -e "==================\n"
           
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Cancel workflow in GitHub to terminate"
-              Start-Sleep -Seconds 300
-          }
+          while true; do
+              echo "[$(date)] Ubuntu RDP Active - Cancel workflow in GitHub to terminate"
+              sleep 300
+          done
